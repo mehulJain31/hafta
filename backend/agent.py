@@ -8,7 +8,7 @@ import anthropic
 
 import policies
 
-MODEL = os.getenv("HAFTA_MODEL", "claude-opus-5-5")
+MODEL = os.getenv("CLOVEFI_MODEL", "claude-opus-5-5")
 LENDER_NAME = os.getenv("LENDER_NAME", "your lender")
 AGENT_NAME = "Richie"
 
@@ -43,8 +43,12 @@ TURN_SCHEMA = {
             "type": ["string", "null"],
             "description": "Short summary of why the borrower can't pay on time, if they said. Null otherwise.",
         },
+        "summary": {
+            "type": "string",
+            "description": "One short sentence summarizing where the conversation stands and what was decided, for a human reviewing later. E.g. 'Agreed to a plan: $150 on Feb 2 and $300 on Feb 20.' or 'Disputed the debt, says it was already paid.'",
+        },
     },
-    "required": ["reply", "outcome", "payments", "missed_payment_reason"],
+    "required": ["reply", "outcome", "payments", "missed_payment_reason", "summary"],
     "additionalProperties": False,
 }
 
@@ -71,7 +75,7 @@ def opening_message(name: str, amount_due: float, due_date: date) -> str:
     )
 
 
-def _system_prompt(name: str, amount_due: float, due_date: date) -> str:
+def _system_prompt(name: str, amount_due: float, due_date: date, prior_context: str | None = None) -> str:
     today = date.today()
     days_past_due = (today - due_date).days
     status = (
@@ -79,7 +83,14 @@ def _system_prompt(name: str, amount_due: float, due_date: date) -> str:
         else "due today" if days_past_due == 0
         else f"due in {-days_past_due} days"
     )
+    history_block = ""
+    if prior_context:
+        history_block = (
+            f"\nWhat happened last time you spoke with {first_name(name)} (reference it naturally if relevant, "
+            f"e.g. a promise they made or missed; don't re-litigate a closed dispute):\n{prior_context}\n"
+        )
     return f"""You are {AGENT_NAME}, an automated collections assistant texting a borrower for {LENDER_NAME}, their auto lender.
+{history_block}
 
 Loan facts (the only facts you know):
 - Borrower name: {name} (use their first name, {first_name(name)}, now and then, not in every message)
@@ -140,7 +151,7 @@ def check_payments(outcome: str, payments: list[dict], amount_due: float, due_da
     return problems
 
 
-class HaftaError(Exception):
+class ClovefiError(Exception):
     pass
 
 
@@ -151,31 +162,34 @@ def _stop_turn() -> dict:
         "outcome": "stop_request",
         "payments": [],
         "missed_payment_reason": None,
+        "summary": "Borrower sent an opt-out keyword; no further contact through this chat.",
     }
 
 
-def reply(name: str, amount_due: float, due_date: date, messages: list[dict]) -> dict:
-    """messages: [{"role": "hafta" | "borrower", "text": str}], starting with Richie's opener.
+def reply(name: str, amount_due: float, due_date: date, messages: list[dict],
+          prior_context: str | None = None) -> dict:
+    """messages: [{"role": "agent" | "borrower", "text": str}], starting with Richie's opener.
 
-    Returns {"reply", "outcome", "payments", "missed_payment_reason", "ended", "policy_issues"}.
+    Returns {"reply", "outcome", "payments", "missed_payment_reason", "summary", "ended", "policy_issues"}.
     """
     last = messages[-1]["text"].strip().lower().strip(".!")
     if last in policies.STOP_WORDS:
         turn = _stop_turn()
     else:
-        turn = _ask_claude(name, amount_due, due_date, messages)
+        turn = _ask_claude(name, amount_due, due_date, messages, prior_context)
 
     turn["ended"] = turn["outcome"] in policies.ENDING_OUTCOMES
     turn["policy_issues"] = check_payments(turn["outcome"], turn["payments"], amount_due, due_date)
     return turn
 
 
-def _ask_claude(name: str, amount_due: float, due_date: date, messages: list[dict]) -> dict:
+def _ask_claude(name: str, amount_due: float, due_date: date, messages: list[dict],
+                prior_context: str | None = None) -> dict:
     # Claude's history must start with a user turn, so a placeholder comes before Richie's opener.
     history = [{"role": "user", "content": f"[Conversation started. {AGENT_NAME} texts the borrower first.]"}]
     for m in messages:
         history.append({
-            "role": "assistant" if m["role"] == "hafta" else "user",
+            "role": "assistant" if m["role"] == "agent" else "user",
             "content": m["text"],
         })
 
@@ -189,30 +203,30 @@ def _ask_claude(name: str, amount_due: float, due_date: date, messages: list[dic
             },
             betas=["server-side-fallback-2026-07-01"],
             fallbacks="default",
-            system=_system_prompt(name, amount_due, due_date),
+            system=_system_prompt(name, amount_due, due_date, prior_context),
             messages=history,
         )
     except TypeError as e:  # SDK raises this when no credentials are configured at all
-        raise HaftaError("No Anthropic API key found. Set ANTHROPIC_API_KEY in backend/.env.") from e
+        raise ClovefiError("No Anthropic API key found. Set ANTHROPIC_API_KEY in backend/.env.") from e
     except anthropic.AuthenticationError as e:
-        raise HaftaError("Anthropic API key is missing or invalid.") from e
+        raise ClovefiError("Anthropic API key is missing or invalid.") from e
     except anthropic.RateLimitError as e:
-        raise HaftaError("Rate limited by Anthropic. Try again shortly.") from e
+        raise ClovefiError("Rate limited by Anthropic. Try again shortly.") from e
     except anthropic.APIStatusError as e:
-        raise HaftaError(f"Claude API error ({e.status_code}): {e.message}") from e
+        raise ClovefiError(f"Claude API error ({e.status_code}): {e.message}") from e
     except anthropic.APIConnectionError as e:
-        raise HaftaError("Couldn't reach the Claude API.") from e
+        raise ClovefiError("Couldn't reach the Claude API.") from e
 
     if response.stop_reason == "refusal":
-        raise HaftaError("Claude declined to reply to this message.")
+        raise ClovefiError("Claude declined to reply to this message.")
     if response.stop_reason == "max_tokens":
-        raise HaftaError("Claude's reply was cut off.")
+        raise ClovefiError("Claude's reply was cut off.")
 
     text = next((b.text for b in response.content if b.type == "text"), "")
     try:
         turn = json.loads(text)
     except json.JSONDecodeError as e:
-        raise HaftaError("Claude returned a reply in an unexpected format.") from e
+        raise ClovefiError("Claude returned a reply in an unexpected format.") from e
     if not turn.get("reply", "").strip():
-        raise HaftaError("Claude returned an empty reply.")
+        raise ClovefiError("Claude returned an empty reply.")
     return turn

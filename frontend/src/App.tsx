@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 
-type Loan = { name: string; amount_due: number; due_date: string }
-type Message = { role: 'hafta' | 'borrower'; text: string }
+type Loan = { name: string; phone: string; amount_due: number; due_date: string }
+type Message = { role: 'agent' | 'borrower'; text: string }
 type Payment = { date: string; amount: number }
 type Turn = {
   message: Message
@@ -10,6 +10,15 @@ type Turn = {
   missed_payment_reason: string | null
   ended: boolean
   policy_issues: string[]
+}
+type StartResponse = { conversation_id: number; message: Message; prior_context: string | null }
+
+class ApiError extends Error {
+  status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
 }
 
 // Badge label and color for each outcome Richie reports.
@@ -48,33 +57,26 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
     const detail = data.detail
-    // FastAPI validation errors come back as a list
     const msg = Array.isArray(detail)
       ? detail.map((d: { msg: string }) => d.msg.replace(/^Value error, /, '')).join('; ')
       : detail || `Request failed (${res.status})`
-    throw new Error(msg)
+    throw new ApiError(res.status, msg)
   }
   return data as T
 }
 
 /* ---------- Icons ---------- */
 
-function ChatIcon() {
+function Wordmark({ className = '' }: { className?: string }) {
   return (
-    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.2 3.6c-.5.4-1.3.1-1.3-.6V16A2.5 2.5 0 0 1 4 13.5v-8Z" fill="currentColor" />
-      <circle cx="8.5" cy="9.5" r="1.2" fill="#003262" />
-      <circle cx="12" cy="9.5" r="1.2" fill="#003262" />
-      <circle cx="15.5" cy="9.5" r="1.2" fill="#003262" />
-    </svg>
-  )
-}
-
-function CloseIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
-    </svg>
+    <span className={`wordmark ${className}`}>
+      <svg viewBox="0 0 48 64" className="wordmark-mark" aria-hidden="true">
+        <path d="M11 22a13 13 0 0 1 26 0z" fill="#E0A05A" />
+        <path d="M24 22C23 34 19 45 20 56" fill="none" stroke="#5C3A1B" strokeWidth="7" strokeLinecap="round" />
+        <path d="M13 24 16 16 20 18 24 12 28 18 32 16 35 24Z" fill="#5C3A1B" />
+      </svg>
+      <span className="wordmark-text">Clovefi</span>
+    </span>
   )
 }
 
@@ -86,150 +88,219 @@ function SendIcon() {
   )
 }
 
-function Logo({ lender }: { lender: string }) {
+function BackIcon() {
   return (
-    <div className="logo">
-      <span className="logo-mark" aria-hidden="true">
-        <svg viewBox="0 0 32 32" width="32" height="32">
-          <rect width="32" height="32" rx="7" fill="#003262" />
-          <path d="M16 6l9 5H7l9-5Z" fill="#FDB515" />
-          <rect x="9" y="13" width="2.6" height="9" fill="#fff" />
-          <rect x="14.7" y="13" width="2.6" height="9" fill="#fff" />
-          <rect x="20.4" y="13" width="2.6" height="9" fill="#fff" />
-          <rect x="7" y="23.5" width="18" height="2.5" fill="#FDB515" />
-        </svg>
-      </span>
-      <span className="logo-text">{lender}</span>
-    </div>
+    <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M15 5l-7 7 7 7" stroke="currentColor" strokeWidth="2.2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   )
 }
 
-/* ---------- Bank website (background) ---------- */
+/* ---------- Landing ---------- */
 
-function BankSite({ lender, onOpenChat }: { lender: string; onOpenChat: () => void }) {
+const STEPS: [string, string][] = [
+  ['Reaches out', 'Richie opens with the debt-collection notice the law requires, and asks when the borrower can pay.'],
+  ['Negotiates in policy', 'Offers only what you allow — pay in full, split into installments, or a short extension — and pins down exact dates and amounts.'],
+  ['Logs the outcome', 'Every promise, dispute and opt-out is saved as data you can act on later.'],
+]
+
+const FEATURES: [string, string][] = [
+  ['Follows the FDCPA', 'No threats, honest amounts, right-party contact — §§805–809 built into every message.'],
+  ['Honors opt-outs', "Stops on request or when an attorney is involved, and won't contact them again."],
+  ['Pauses on disputes', 'Flags the account and holds collection until written verification is sent.'],
+  ['Remembers last time', "Recalls a borrower's prior promise and open balance on the next conversation."],
+  ['Stays on your policy', "Agreed plans are re-checked against your limits — not taken on the model's word."],
+  ['Decisions as data', 'Outcomes and promised payments are stored so you can query and follow up.'],
+]
+
+function Landing({ lender, onInitiate }: { lender: string; onInitiate: () => void }) {
   return (
-    <div className="site">
-      <nav className="nav">
-        <div className="wrap nav-inner">
-          <Logo lender={lender} />
-          <div className="nav-links">
-            <a>Personal</a>
-            <a>Auto Loans</a>
-            <a>Business</a>
-            <a>About</a>
-          </div>
-          <button className="btn-gold sm">Sign in</button>
-        </div>
-      </nav>
-
-      <header className="hero">
-        <div className="wrap hero-inner">
-          <div className="hero-copy">
-            <p className="eyebrow">Auto loans</p>
-            <h1>Banking that keeps you moving.</h1>
-            <p className="lede">
-              Competitive rates, flexible payment options and real help when life gets in the way. Have a question about a
-              payment? Our assistant Richie is here around the clock.
-            </p>
-            <div className="hero-actions">
-              <button className="btn-gold" onClick={onOpenChat}>Chat with Richie</button>
-              <button className="btn-outline">View loan rates</button>
-            </div>
-          </div>
-          <div className="hero-card" aria-hidden="true">
-            <div className="hc-row">
-              <span>Auto loan</span>
-              <span className="hc-tag">Active</span>
-            </div>
-            <div className="hc-amount">$18,240.00</div>
-            <div className="hc-label">Remaining balance</div>
-            <div className="hc-bar"><span style={{ width: '42%' }} /></div>
-            <div className="hc-row muted">
-              <span>Next payment</span>
-              <span>$450.00</span>
-            </div>
-          </div>
+    <div className="home">
+      <header className="home-nav">
+        <div className="home-nav-inner">
+          <Wordmark />
+          <nav className="home-links">
+            <a href="#how">How it works</a>
+            <a href="#compliance">Compliance</a>
+          </nav>
+          <button className="btn-gold sm" onClick={onInitiate}>Initiate collections</button>
         </div>
       </header>
 
-      <section className="features wrap">
-        {[
-          ['Flexible payments', 'Split a payment or request a short extension when you need a little more time.'],
-          ['Help, not pressure', 'Talk through options with Richie or our team, privately and respectfully.'],
-          ['Know where you stand', 'See your balance, due dates and payment history in one place.'],
-        ].map(([title, body]) => (
-          <div className="feature" key={title}>
-            <span className="feature-dot" />
-            <h3>{title}</h3>
-            <p>{body}</p>
+      <section className="hero">
+        <div className="hero-inner">
+          <div className="hero-copy">
+            <p className="eyebrow">AI-powered collections</p>
+            <h1>Collections that stay <span className="accent">compliant.</span></h1>
+            <p className="lede">
+              Clovefi is AI-powered collections — Richie reaches out to borrowers in late-stage collections, negotiates a payment within your policy, and
+              follows the FDCPA on every message — on behalf of {lender}.
+            </p>
+            <div className="hero-actions">
+              <button className="cta" onClick={onInitiate}>Initiate collections</button>
+              <a className="ghost-link" href="#how">See how it works →</a>
+            </div>
+            <div className="trust-row">
+              <span>FDCPA-aware</span>
+              <span>Every decision logged</span>
+              <span>Opt-outs honored</span>
+            </div>
           </div>
-        ))}
+
+          <div className="hero-preview" aria-hidden="true">
+            <div className="preview-head">
+              <span className="head-avatar">R</span>
+              <div className="head-text">
+                <strong>Richie</strong>
+                <span><i className="online" /> {lender}</span>
+              </div>
+              <span className="badge good">Payment plan</span>
+            </div>
+            <div className="preview-body">
+              <div className="pv agent">Hi Jordan, your payment of $450.00 is past due. When can you pay?</div>
+              <div className="pv borrower">I lost some shifts — can I split it?</div>
+              <div className="pv agent">Of course. $150 on Feb 2 and $300 on Feb 20 works and fits our policy — you're all set.</div>
+            </div>
+          </div>
+        </div>
       </section>
 
-      <footer className="footer">
-        <div className="wrap footer-inner">
-          <span>© {new Date().getFullYear()} {lender}. Member FDIC. Equal Housing Lender.</span>
-          <span>Demo site</span>
+      <section id="how" className="section">
+        <h2>How Richie works</h2>
+        <div className="steps">
+          {STEPS.map(([title, body], i) => (
+            <div className="step" key={title}>
+              <span className="step-n">{i + 1}</span>
+              <h3>{title}</h3>
+              <p>{body}</p>
+            </div>
+          ))}
         </div>
+      </section>
+
+      <section id="compliance" className="section tint">
+        <h2>Built to stay within the lines</h2>
+        <p className="section-sub">Compliance isn't a disclaimer bolted on — it's how Richie is wired.</p>
+        <div className="grid">
+          {FEATURES.map(([title, body]) => (
+            <div className="feature" key={title}>
+              <span className="feature-dot" />
+              <h3>{title}</h3>
+              <p>{body}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="cta-band">
+        <h2>See Richie handle a conversation.</h2>
+        <button className="cta" onClick={onInitiate}>Initiate collections</button>
+      </section>
+
+      <footer className="home-foot">
+        <Wordmark />
+        <span>© {new Date().getFullYear()} Clovefi · On behalf of {lender} · Demo</span>
       </footer>
     </div>
   )
 }
 
-/* ---------- Chat widget ---------- */
+/* ---------- Collection form ---------- */
 
-function SetupForm({ onStart }: { onStart: (loan: Loan, opener: Message) => void }) {
+function CollectionForm({
+  lender,
+  onStarted,
+  onBack,
+}: {
+  lender: string
+  onStarted: (loan: Loan, res: StartResponse) => void
+  onBack: () => void
+}) {
   const [name, setName] = useState('')
+  const [phone, setPhone] = useState('')
   const [amount, setAmount] = useState('')
   const [dueDate, setDueDate] = useState('')
   const [error, setError] = useState('')
+  const [blocked, setBlocked] = useState('')
   const [busy, setBusy] = useState(false)
 
   async function submit(e: FormEvent) {
     e.preventDefault()
     setError('')
-    const loan = { name: name.trim(), amount_due: Number(amount), due_date: dueDate }
+    setBlocked('')
+    const loan: Loan = { name: name.trim(), phone: phone.trim(), amount_due: Number(amount), due_date: dueDate }
     setBusy(true)
     try {
-      const { message } = await post<{ message: Message }>('/api/start', loan)
-      onStart(loan, message)
+      const res = await post<StartResponse>('/api/start', loan)
+      onStarted(loan, res)
     } catch (err) {
-      setError((err as Error).message)
+      if (err instanceof ApiError && err.status === 409) setBlocked(err.message)
+      else setError((err as Error).message)
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <form className="setup" onSubmit={submit}>
-      <div className="setup-intro">
-        <h2>Start a demo chat</h2>
-        <p>Enter the borrower's details. Richie will reach out about the payment, and you reply as the borrower.</p>
-      </div>
-      <label>
-        Borrower name
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Jordan Lee" autoComplete="off" required />
-      </label>
-      <div className="row">
-        <label>
-          Amount due
-          <div className="prefix">
-            <span>$</span>
-            <input type="number" step="0.01" min="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="450.00" required />
+    <div className="panel">
+      <button className="back" onClick={onBack}><BackIcon /> Back</button>
+      <h2>New collection</h2>
+      <p className="panel-sub">Enter the borrower and the past-due payment. Richie opens the conversation; you reply as the borrower.</p>
+      {blocked ? (
+        <div className="blocked">
+          <strong>Can't start this chat.</strong>
+          <p>{blocked}</p>
+          <button className="btn-blue" onClick={() => setBlocked('')}>Edit details</button>
+        </div>
+      ) : (
+        <form className="fields" onSubmit={submit}>
+          <label>
+            Borrower name
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Jordan Lee" autoComplete="off" required />
+          </label>
+          <label>
+            Phone number
+            <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+1 555 123 4567" autoComplete="off" required />
+          </label>
+          <div className="row">
+            <label>
+              Amount due
+              <div className="prefix">
+                <span>$</span>
+                <input type="number" step="0.01" min="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="450.00" required />
+              </div>
+            </label>
+            <label>
+              Due date
+              <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} required />
+            </label>
           </div>
-        </label>
-        <label>
-          Due date
-          <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} required />
-        </label>
-      </div>
-      {error && <p className="error">{error}</p>}
-      <button type="submit" className="btn-blue" disabled={busy}>{busy ? 'Starting…' : 'Start chat'}</button>
-    </form>
+          {error && <p className="error">{error}</p>}
+          <button type="submit" className="btn-blue" disabled={busy}>{busy ? 'Starting…' : 'Start conversation'}</button>
+          <p className="lender-note">On behalf of {lender}</p>
+        </form>
+      )}
+    </div>
   )
 }
 
-function Conversation({ loan, opener }: { loan: Loan; opener: Message }) {
+/* ---------- Chat ---------- */
+
+function Chat({
+  loan,
+  opener,
+  conversationId,
+  priorContext,
+  lender,
+  onNew,
+}: {
+  loan: Loan
+  opener: Message
+  conversationId: number
+  priorContext: string | null
+  lender: string
+  onNew: () => void
+}) {
   const [messages, setMessages] = useState<Message[]>([opener])
   const [draft, setDraft] = useState('')
   const [typing, setTyping] = useState(false)
@@ -252,7 +323,7 @@ function Conversation({ loan, opener }: { loan: Loan; opener: Message }) {
     setError('')
     setTyping(true)
     try {
-      const { message, ...rest } = await post<Turn>('/api/reply', { loan, messages: next })
+      const { message, ...rest } = await post<Turn>('/api/reply', { conversation_id: conversationId, text })
       setMessages([...next, message])
       setTurn(rest)
     } catch (err) {
@@ -268,23 +339,33 @@ function Conversation({ loan, opener }: { loan: Loan; opener: Message }) {
   const showSummary = turn && (turn.payments.length > 0 || turn.missed_payment_reason || turn.policy_issues.length > 0)
 
   return (
-    <>
+    <div className="chat-card">
+      <header className="chat-head">
+        <span className="head-avatar">R</span>
+        <div className="head-text">
+          <strong>Richie</strong>
+          <span><i className="online" /> {lender} · automated assistant</span>
+        </div>
+        <button className="head-btn text" onClick={onNew}>New collection</button>
+      </header>
+
       <div className="loan-strip">
-        <span>
-          <strong>{loan.name}</strong> · {money(loan.amount_due)} due {day(loan.due_date)}
-        </span>
+        <span><strong>{loan.name}</strong> · {money(loan.amount_due)} due {day(loan.due_date)}</span>
         <span className={`badge ${badge.tone}`}>{badge.label}</span>
       </div>
 
       <div className="messages">
+        {priorContext && (
+          <div className="recall"><b>Richie remembers</b> {priorContext}</div>
+        )}
         {messages.map((m, i) => (
           <div key={i} className={`msg ${m.role}`}>
-            {m.role === 'hafta' && <span className="avatar" aria-hidden="true">R</span>}
+            {m.role === 'agent' && <span className="avatar" aria-hidden="true">R</span>}
             <div className="bubble">{m.text}</div>
           </div>
         ))}
         {typing && (
-          <div className="msg hafta">
+          <div className="msg agent">
             <span className="avatar" aria-hidden="true">R</span>
             <div className="bubble dots" aria-label="Richie is typing"><i /><i /><i /></div>
           </div>
@@ -316,46 +397,19 @@ function Conversation({ loan, opener }: { loan: Loan; opener: Message }) {
           </button>
         </form>
       )}
-    </>
+    </div>
   )
 }
 
-function ChatWidget({ lender, open, setOpen }: { lender: string; open: boolean; setOpen: (o: boolean) => void }) {
-  const [session, setSession] = useState<{ loan: Loan; opener: Message; key: number } | null>(null)
+/* ---------- App ---------- */
 
-  return (
-    <>
-      <section className={`widget ${open ? 'open' : ''}`} aria-hidden={!open} aria-label="Chat with Richie">
-        <header className="widget-head">
-          <span className="head-avatar">R</span>
-          <div className="head-text">
-            <strong>Richie</strong>
-            <span><i className="online" /> {lender} assistant</span>
-          </div>
-          {session && (
-            <button className="head-btn text" onClick={() => setSession(null)}>New chat</button>
-          )}
-          <button className="head-btn" onClick={() => setOpen(false)} aria-label="Close chat"><CloseIcon /></button>
-        </header>
-        <div className="widget-body">
-          {session ? (
-            <Conversation key={session.key} loan={session.loan} opener={session.opener} />
-          ) : (
-            <SetupForm onStart={(loan, opener) => setSession({ loan, opener, key: Date.now() })} />
-          )}
-        </div>
-      </section>
-
-      <button className={`launcher ${open ? 'is-open' : ''}`} onClick={() => setOpen(!open)} aria-label={open ? 'Close chat' : 'Chat with Richie'}>
-        {open ? <CloseIcon /> : <ChatIcon />}
-      </button>
-    </>
-  )
-}
+type Screen = 'landing' | 'form' | 'chat'
+type Session = { loan: Loan; opener: Message; conversationId: number; priorContext: string | null }
 
 export default function App() {
   const [lender, setLender] = useState('State Bank of Elytra')
-  const [open, setOpen] = useState(false)
+  const [screen, setScreen] = useState<Screen>('landing')
+  const [session, setSession] = useState<Session | null>(null)
 
   useEffect(() => {
     fetch('/api/config')
@@ -365,13 +419,47 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    document.title = lender
-  }, [lender])
+    document.title = 'Clovefi'
+  }, [])
+
+  if (screen === 'landing') {
+    return (
+      <main className="app">
+        <Landing lender={lender} onInitiate={() => setScreen('form')} />
+      </main>
+    )
+  }
 
   return (
-    <>
-      <BankSite lender={lender} onOpenChat={() => setOpen(true)} />
-      <ChatWidget lender={lender} open={open} setOpen={setOpen} />
-    </>
+    <main className="app">
+      <header className="topbar">
+        <button className="topbar-logo" onClick={() => { setScreen('landing'); setSession(null) }}>
+          <Wordmark />
+        </button>
+      </header>
+
+      <div className="stage">
+        {screen === 'form' && (
+          <CollectionForm
+            lender={lender}
+            onBack={() => setScreen('landing')}
+            onStarted={(loan, res) => {
+              setSession({ loan, opener: res.message, conversationId: res.conversation_id, priorContext: res.prior_context })
+              setScreen('chat')
+            }}
+          />
+        )}
+        {screen === 'chat' && session && (
+          <Chat
+            loan={session.loan}
+            opener={session.opener}
+            conversationId={session.conversationId}
+            priorContext={session.priorContext}
+            lender={lender}
+            onNew={() => { setSession(null); setScreen('form') }}
+          />
+        )}
+      </div>
+    </main>
   )
 }

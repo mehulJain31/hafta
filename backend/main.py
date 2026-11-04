@@ -1,22 +1,34 @@
-"""Hafta v0 API. Stateless: the browser sends the whole chat on each reply."""
+"""Clovefi API. The server owns state: chats persist in the database (see store.py)."""
 
+from contextlib import asynccontextmanager
 from datetime import date
-from typing import Literal
 
 from dotenv import load_dotenv
 
 load_dotenv()  # must run before agent.py creates the Anthropic client
 
-from fastapi import FastAPI, HTTPException  # noqa: E402
+from fastapi import Depends, FastAPI, HTTPException  # noqa: E402
 from pydantic import BaseModel, Field, field_validator  # noqa: E402
+from sqlmodel import Session  # noqa: E402
 
 import agent  # noqa: E402
+import db  # noqa: E402
+import store  # noqa: E402
+from models import Conversation  # noqa: E402
 
-app = FastAPI(title="Hafta")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    db.create_db_and_tables()
+    yield
 
 
-class Loan(BaseModel):
+app = FastAPI(title="Clovefi", lifespan=lifespan)
+
+
+class StartRequest(BaseModel):
     name: str
+    phone: str
     amount_due: float = Field(gt=0)
     due_date: date
 
@@ -28,15 +40,18 @@ class Loan(BaseModel):
             raise ValueError("Enter the borrower's name")
         return v
 
-
-class Message(BaseModel):
-    role: Literal["hafta", "borrower"]
-    text: str = Field(min_length=1, max_length=2000)
+    @field_validator("phone")
+    @classmethod
+    def check_phone(cls, v: str) -> str:
+        digits = "".join(c for c in v if c.isdigit())
+        if not 7 <= len(digits) <= 15:
+            raise ValueError("Enter a valid phone number")
+        return v.strip()
 
 
 class ReplyRequest(BaseModel):
-    loan: Loan
-    messages: list[Message] = Field(min_length=2, max_length=100)
+    conversation_id: int
+    text: str = Field(min_length=1, max_length=2000)
 
 
 @app.get("/api/config")
@@ -45,26 +60,37 @@ def config():
 
 
 @app.post("/api/start")
-def start(loan: Loan):
-    return {"message": {"role": "hafta", "text": agent.opening_message(loan.name, loan.amount_due, loan.due_date)}}
+def start(req: StartRequest, session: Session = Depends(db.get_session)):
+    try:
+        return store.start_conversation(session, req.name, req.phone, req.amount_due, req.due_date)
+    except store.ContactBlocked as e:
+        raise HTTPException(409, e.reason)
 
 
 @app.post("/api/reply")
-def reply(req: ReplyRequest):
-    if req.messages[-1].role != "borrower":
-        raise HTTPException(400, "The last message must be from the borrower.")
+def reply(req: ReplyRequest, session: Session = Depends(db.get_session)):
+    convo = session.get(Conversation, req.conversation_id)
+    if convo is None:
+        raise HTTPException(404, "Conversation not found.")
+    if convo.status == "ended":
+        raise HTTPException(409, "This conversation has ended.")
     try:
-        turn = agent.reply(
-            req.loan.name, req.loan.amount_due, req.loan.due_date,
-            [m.model_dump() for m in req.messages],
-        )
-    except agent.HaftaError as e:
+        turn = store.record_turn(session, convo, req.text)
+    except agent.ClovefiError as e:
         raise HTTPException(502, str(e))
     return {
-        "message": {"role": "hafta", "text": turn["reply"]},
+        "message": {"role": "agent", "text": turn["reply"]},
         "outcome": turn["outcome"],
         "payments": turn["payments"],
         "missed_payment_reason": turn["missed_payment_reason"],
         "ended": turn["ended"],
         "policy_issues": turn["policy_issues"],
     }
+
+
+@app.get("/api/conversations/{conversation_id}")
+def get_conversation(conversation_id: int, session: Session = Depends(db.get_session)):
+    detail = store.conversation_detail(session, conversation_id)
+    if detail is None:
+        raise HTTPException(404, "Conversation not found.")
+    return detail
