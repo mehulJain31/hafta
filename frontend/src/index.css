@@ -208,3 +208,46 @@ html { scroll-behavior: smooth; }
   .fields .row { flex-direction: column; }
   .chat-card { height: calc(100vh - 150px); }
 }
+
+/* ---------- Phase 3: loans list + structured chat ---------- */
+.panel.wide { max-width: 760px; }
+.panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.panel-head .back { padding: 0; }
+.muted-row { color: var(--muted); padding: 16px 2px; }
+
+table.loans { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.92rem; }
+table.loans th { text-align: left; color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+table.loans td { padding: 12px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+table.loans td.right { text-align: right; }
+table.loans td .sub { color: var(--muted); font-size: 0.8rem; margin-left: 8px; }
+.btn-blue.sm { width: auto; padding: 7px 16px; font-size: 0.85rem; border-radius: 9px; }
+
+/* structured chat turns */
+.structured { display: flex; flex-direction: column; gap: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; padding-left: 38px; }
+.chip { background: var(--white); border: 1.5px solid var(--blue-soft); color: var(--blue); border-radius: 999px; padding: 8px 14px; font-size: 0.88rem; font-weight: 600; }
+.chip:hover:not(:disabled) { border-color: var(--blue-2); background: var(--blue-soft); }
+.note { margin-left: 38px; max-width: 320px; font: inherit; font-size: 0.88rem; padding: 8px 12px; border: 1px solid var(--border); border-radius: 9px; }
+
+.options { display: flex; flex-direction: column; gap: 10px; padding-left: 38px; }
+.option { text-align: left; background: var(--white); border: 1.5px solid var(--border); border-radius: 14px; padding: 14px 16px; display: flex; flex-direction: column; gap: 3px; transition: border-color .15s, box-shadow .15s; }
+.option:hover:not(:disabled) { border-color: var(--gold); box-shadow: 0 4px 14px rgba(253,181,21,.18); }
+.option:disabled { opacity: 0.55; }
+.option-title { font-weight: 700; color: var(--blue); font-size: 0.98rem; margin-bottom: 2px; }
+.option-line { font-size: 0.9rem; color: var(--text); }
+.option-line em { color: var(--muted); font-style: normal; }
+
+.plan { background: var(--gold-soft); border: 1px solid #f6dfa3; border-radius: 14px; padding: 12px 14px; margin-left: 38px; display: flex; flex-direction: column; gap: 6px; }
+.plan-line { display: flex; justify-content: space-between; font-size: 0.9rem; color: #5c4300; }
+.plan-line span:first-child { color: #8a5a00; font-weight: 600; }
+.plan-actions { display: flex; align-items: center; gap: 14px; margin-top: 8px; }
+.linklike { background: none; border: none; color: var(--blue-2); font-weight: 600; font-size: 0.85rem; text-decoration: underline; padding: 0; }
+
+/* ---------- Phase 5: staff ---------- */
+.head-actions { display: flex; align-items: center; gap: 10px; }
+.ghost-btn { background: transparent; border: 1px solid var(--border); color: var(--blue); border-radius: 999px; padding: 8px 16px; font-weight: 600; font-size: 0.85rem; }
+.ghost-btn:hover { border-color: var(--blue-2); }
+.tabs { display: flex; gap: 6px; margin: 4px 0 14px; border-bottom: 1px solid var(--border); }
+.tab { background: none; border: none; padding: 10px 14px; font-weight: 600; font-size: 0.9rem; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tab.active { color: var(--blue); border-bottom-color: var(--gold); }
+table.loans td.wrap { white-space: normal; color: var(--muted); font-size: 0.85rem; max-width: 420px; }

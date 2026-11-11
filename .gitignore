@@ -6,3 +6,6 @@ dist/
 
 # local database
 *.db
+
+# generated docs
+*.pdf
